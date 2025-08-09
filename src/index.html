@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>WebRTC Audio Stream</title>
+</head>
+<body>
+<h1>WebRTC Audio-Stream</h1>
+<button onclick="startAudioStream()">Start Streaming</button>
+<script>
+    let ws;
+
+    function startAudioStream() {
+        console.log("CLIENT: Button geklickt. Versuche, WebSocket zu verbinden...");
+        // WebSocket-Verbindung zum Python-Server
+        ws = new WebSocket("ws://localhost:5005");
+
+        ws.onopen = () => {
+            console.log("CLIENT: WebSocket verbunden! ✅");
+            // Zugriff auf das Mikrofon des Nutzers
+            navigator.mediaDevices.getUserMedia({ audio: true })
+                .then(stream => {
+                    console.log("CLIENT: Mikrofon-Zugriff erhalten. Starte MediaRecorder.");
+                    const mediaRecorder = new MediaRecorder(stream);
+                    mediaRecorder.ondataavailable = event => {
+                        // Sende die Audio-Daten als Blob
+                        if (ws.readyState === WebSocket.OPEN) {
+                            console.log(`CLIENT: Sende Daten-Chunk der Größe: ${event.data.size} Bytes.`);
+                            ws.send(event.data);
+                        }
+                    };
+                    mediaRecorder.start(1000); // 1-Sekunden-Chunks
+                })
+                .catch(error => {
+                    console.error('CLIENT: Zugriff auf Mikrofon verweigert:', error);
+                });
+        };
+
+        ws.onclose = () => {
+            console.log("CLIENT: WebSocket geschlossen.");
+        };
+
+        ws.onerror = (error) => {
+            console.error("CLIENT: WebSocket-Fehler:", error);
+        };
+    }
+</script>
+</body>
+</html>
