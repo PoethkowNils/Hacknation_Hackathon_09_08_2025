@@ -1,98 +1,105 @@
-# deepgram_stream.py
+# server.py - Runs on localhost:5000, relays to Deepgram
 
 import asyncio
-import json
 import websockets
-import pyaudio
+import json
 import os
 
-# Load API key from environment variable
-# Run: export DEEPGRAM_API_KEY='your-key-here' before running script
+# Load Deepgram API key
 DEEPGRAM_API_KEY = os.getenv("DEEPGRAM_API_KEY")
 if not DEEPGRAM_API_KEY:
     raise RuntimeError("Please set DEEPGRAM_API_KEY environment variable.")
 
-# Audio settings
-FORMAT = pyaudio.paInt16        # 16-bit int sampling
-CHANNELS = 1                    # Mono
-RATE = 16000                    # 16kHz sample rate
-CHUNK = 1024                    # 64ms chunks (1024 / 16000 ≈ 0.064s)
-
-# Deepgram WebSocket URL with query params
+# Deepgram WebSocket URL with options
 DEEPGRAM_URL = (
     "wss://api.deepgram.com/v1/listen"
     "?encoding=linear16"
     "&sample_rate=16000"
     "&channels=1"
-    "&diarize=true"              # Enable speaker diarization
-    "&punctuate=true"            # Add punctuation
-    "&model=nova-2"              # Best model (as of 2025)
+    "&diarize=true"           # Diarization!
+    "&punctuate=true"        
+    "&model=nova-2"           # best model
 )
 
+# Track active client and Deepgram connection
+clients = set()
 
-async def stream_audio():
-    print("🎙️ Connecting to Deepgram...")
+
+async def relay_to_deepgram(websocket_client):
+    """Relay audio from client to Deepgram and send back transcripts."""
+    print("Connecting to Deepgram ...")
 
     async with websockets.connect(
         DEEPGRAM_URL,
         additional_headers={"Authorization": f"Token {DEEPGRAM_API_KEY}"}
-    ) as ws:
-        print("🟢 Connected to Deepgram! Speak now...\n")
+    ) as dg_ws:
+        print("Connected to Deepgram!")
 
-        async def mic_listener():
-            """Capture audio from mic and stream to Deepgram."""
-            audio = pyaudio.PyAudio()
-            stream = audio.open(
-                format=FORMAT,
-                channels=CHANNELS,
-                rate=RATE,
-                input=True,
-                frames_per_buffer=CHUNK,
-            )
+        # Forward transcription back to client
+        async def receive_transcription():
+            async for msg in dg_ws:
+                try:
+                    result = json.loads(msg)
+                    if result.get("type") == "PartialTranscript":
+                        transcript = result["channel"]["alternatives"][0]["transcript"]
+                        # Extract speaker if available
+                        speaker = "Unknown"
+                        if "speakers" in result["channel"]["alternatives"][0]:
+                            speaker = result["channel"]["alternatives"][0]["speakers"][0].get("label", "Unknown")
+                        # Send to client
+                        await websocket_client.send(
+                            json.dumps({
+                                "transcript": transcript,
+                                "speaker": speaker,
+                                "is_final": False
+                            })
+                        )
+                    elif result.get("type") == "FinalTranscript":
+                        transcript = result["channel"]["alternatives"][0]["transcript"]
+                        speaker = "Unknown"
+                        if "speakers" in result["channel"]["alternatives"][0]:
+                            speaker = result["channel"]["alternatives"][0]["speakers"][0].get("label", "Unknown")
+                        await websocket_client.send(
+                            json.dumps({
+                                "transcript": transcript,
+                                "speaker": speaker,
+                                "is_final": True
+                            })
+                        )
+                except Exception as e:
+                    print("Error processing Deepgram result:", e)
+
+        # Forward audio from client to Deepgram
+        async def forward_audio():
             try:
-                while True:
-                    data = stream.read(CHUNK, exception_on_overflow=False)
-                    await ws.send(data)
-                    await asyncio.sleep(0.001)  # Prevent blocking
+                async for message in websocket_client:
+                    # Send raw audio bytes to Deepgram
+                    await dg_ws.send(message)
             except websockets.exceptions.ConnectionClosed:
-                print("WebSocket closed during send.")
-            finally:
-                stream.stop_stream()
-                stream.close()
-                audio.terminate()
+                print("Client disconnected.")
 
-        async def response_listener():
-            """Receive transcription results from Deepgram."""
-            try:
-                async for msg in ws:
-                    try:
-                        result = json.loads(msg)
-                        if result.get("type") == "PartialTranscript":
-                            transcript = result["channel"]["alternatives"][0]["transcript"]
-                            # Get speaker if available
-                            if "speakers" in result.get("channel", {}).get("alternatives", [{}])[0]:
-                                speaker = result["channel"]["alternatives"][0]["speakers"][0].get("label", "Unknown")
-                                print(f"🟡 [{speaker}]: {transcript}", end="\r")
-                            else:
-                                print(f"🟡 {transcript}", end="\r")
-
-                        elif result.get("type") == "FinalTranscript":
-                            transcript = result["channel"]["alternatives"][0]["transcript"]
-                            if "speakers" in result.get("channel", {}).get("alternatives", [{}])[0]:
-                                speaker = result["channel"]["alternatives"][0]["speakers"][0].get("label", "Unknown")
-                                print(f"\n✅ [{speaker}]: {transcript}")
-                            else:
-                                print(f"\n✅ {transcript}")
-
-                    except (KeyError, IndexError) as e:
-                        print("Malformed transcript:", result)
-            except websockets.exceptions.ConnectionClosed:
-                print("Connection to Deepgram closed.")
-
-        # Run both tasks concurrently
-        await asyncio.gather(mic_listener(), response_listener())
+        # Run both directions
+        await asyncio.gather(forward_audio(), receive_transcription())
 
 
-# Run the stream
+async def handler(websocket, path):
+    """Handle new client connection."""
+    print(f"Client connected: {websocket.remote_address}")
+    clients.add(websocket)
+    try:
+        await relay_to_deepgram(websocket)
+    except websockets.exceptions.ConnectionClosed:
+        print("Client connection closed.")
+    finally:
+        clients.remove(websocket)
+
+
+# Start server
+start_server = websockets.serve(handler, "localhost", 5000)
+print("Server listening on ws://localhost:5000")
+
+
+
 if __name__ == "__main__":
-    asyncio.run(stream_audio())
+    asyncio.get_event_loop().run_until_complete(start_server)
+    asyncio.get_event_loop().run_forever()
