@@ -13,8 +13,8 @@ if not DEEPGRAM_API_KEY:
 # Deepgram WebSocket URL with options
 DEEPGRAM_URL = (
     "wss://api.deepgram.com/v1/listen"
-    "?encoding=linear16"
-    "&sample_rate=16000"
+    "?encoding=mulaw"
+    "&sample_rate=8000"
     "&channels=1"
     "&diarize=true"           # Diarization!
     "&punctuate=true"        
@@ -31,7 +31,7 @@ async def relay_to_deepgram(websocket_client):
 
     async with websockets.connect(
         DEEPGRAM_URL,
-        additional_headers={"Authorization": f"Token {DEEPGRAM_API_KEY}"}
+        subprotocols=["token", DEEPGRAM_API_KEY]
     ) as dg_ws:
         print("Connected to Deepgram!")
 
@@ -47,6 +47,7 @@ async def relay_to_deepgram(websocket_client):
                         if "speakers" in result["channel"]["alternatives"][0]:
                             speaker = result["channel"]["alternatives"][0]["speakers"][0].get("label", "Unknown")
                         # Send to client
+                        print(transcript)
                         await websocket_client.send(
                             json.dumps({
                                 "transcript": transcript,
@@ -59,6 +60,8 @@ async def relay_to_deepgram(websocket_client):
                         speaker = "Unknown"
                         if "speakers" in result["channel"]["alternatives"][0]:
                             speaker = result["channel"]["alternatives"][0]["speakers"][0].get("label", "Unknown")
+
+                        print(transcript)
                         await websocket_client.send(
                             json.dumps({
                                 "transcript": transcript,
