@@ -16,9 +16,9 @@ DEEPGRAM_URL = (
     "?encoding=linear16"
     "&sample_rate=16000"
     "&channels=1"
-    "&diarize=true"           # Diarization!
+    "&diarize=true"
     "&punctuate=true"
-    "&model=nova-2"           # best model
+    "&model=nova-2"
 )
 
 # Track active client and Deepgram connection
@@ -61,8 +61,9 @@ async def relay_to_deepgram(websocket_client):
                             )
                             if transcript_type == "FinalTranscript":
                                 print("SERVER: Sent final transcription back to client. 🔊")
-                except websockets.exceptions.ConnectionClosed:
-                    print("SERVER: Deepgram connection closed.")
+                except websockets.exceptions.ConnectionClosed as e:
+                    print(f"SERVER: Deepgram-Verbindung wurde geschlossen. Code: {e.code}, Grund: {e.reason}")
+
                 except Exception as e:
                     print("SERVER: Error processing Deepgram result:", e)
 

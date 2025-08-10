@@ -6,42 +6,83 @@
 <body>
 <h1>WebRTC Audio-Stream</h1>
 <button onclick="startAudioStream()">Start Streaming</button>
+<button onclick="stopAudioStream()">Stop Streaming</button>
 <script>
     let ws;
+    let audioContext;
+    let microphone;
+    let recorder;
 
-    function startAudioStream() {
+    async function startAudioStream() {
         console.log("CLIENT: Button geklickt. Versuche, WebSocket zu verbinden...");
-        // WebSocket-Verbindung zum Python-Server
+
+        // Stelle sicher, dass nur eine Verbindung aktiv ist
+        if (ws && ws.readyState === WebSocket.OPEN) {
+            console.log("CLIENT: Verbindung ist bereits offen.");
+            return;
+        }
+
         ws = new WebSocket("ws://localhost:5005");
 
-        ws.onopen = () => {
+        ws.onopen = async () => {
             console.log("CLIENT: WebSocket verbunden! ✅");
-            // Zugriff auf das Mikrofon des Nutzers
-            navigator.mediaDevices.getUserMedia({ audio: true })
-                .then(stream => {
-                    console.log("CLIENT: Mikrofon-Zugriff erhalten. Starte MediaRecorder.");
-                    const mediaRecorder = new MediaRecorder(stream);
-                    mediaRecorder.ondataavailable = event => {
-                        // Sende die Audio-Daten als Blob
-                        if (ws.readyState === WebSocket.OPEN) {
-                            console.log(`CLIENT: Sende Daten-Chunk der Größe: ${event.data.size} Bytes.`);
-                            ws.send(event.data);
-                        }
-                    };
-                    mediaRecorder.start(1000); // 1-Sekunden-Chunks
-                })
-                .catch(error => {
-                    console.error('CLIENT: Zugriff auf Mikrofon verweigert:', error);
-                });
+
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                console.log("CLIENT: Mikrofon-Zugriff erhalten. Starte Audio-Worklet.");
+
+                audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+
+                // Lade den AudioWorklet-Prozessor
+                await audioContext.audioWorklet.addModule('recorder-processor.js');
+
+                microphone = audioContext.createMediaStreamSource(stream);
+                recorder = new AudioWorkletNode(audioContext, 'recorder-processor');
+
+                recorder.port.onmessage = event => {
+                    if (ws.readyState === WebSocket.OPEN) {
+                        // Sende die rohen Audiodaten direkt an den Server
+                        ws.send(event.data);
+                        console.log(`CLIENT: Sende rohen Audio-Chunk der Größe: ${event.data.byteLength} Bytes.`);
+                    }
+                };
+
+                microphone.connect(recorder);
+                recorder.connect(audioContext.destination);
+
+            } catch (error) {
+                console.error('CLIENT: Zugriff auf Mikrofon verweigert oder Fehler bei Audio-Worklet:', error);
+            }
         };
 
         ws.onclose = () => {
             console.log("CLIENT: WebSocket geschlossen.");
+            cleanup();
         };
 
         ws.onerror = (error) => {
             console.error("CLIENT: WebSocket-Fehler:", error);
+            cleanup();
         };
+    }
+
+    function stopAudioStream() {
+        if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.close();
+            console.log("CLIENT: Stop-Button geklickt. WebSocket wird geschlossen.");
+        }
+    }
+
+    function cleanup() {
+        if (recorder) {
+            recorder.disconnect();
+        }
+        if (microphone) {
+            microphone.disconnect();
+        }
+        if (audioContext) {
+            audioContext.close();
+        }
     }
 </script>
 </body>
