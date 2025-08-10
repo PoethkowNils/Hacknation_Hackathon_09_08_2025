@@ -6,9 +6,8 @@ import websockets
 import ssl
 import os
 
-
 def sts_connect():
-    # you can run export DEEPGRAM_API_KEY="your key" in your terminal to set your API key.
+    # You can run export DEEPGRAM_API_KEY="your key" in your terminal to set your API key.
     api_key = os.getenv('DEEPGRAM_API_KEY')
     if not api_key:
         raise ValueError("DEEPGRAM_API_KEY environment variable is not set")
@@ -18,7 +17,6 @@ def sts_connect():
         subprotocols=["token", api_key]
     )
     return sts_ws
-
 
 async def twilio_handler(twilio_ws):
     audio_queue = asyncio.Queue()
@@ -78,7 +76,6 @@ async def twilio_handler(twilio_ws):
                 "greeting": ""
             }
         }
-
         await sts_ws.send(json.dumps(config_message))
 
         async def sts_sender(sts_ws):
@@ -86,16 +83,14 @@ async def twilio_handler(twilio_ws):
             while True:
                 chunk = await audio_queue.get()
                 await sts_ws.send(chunk)
+                audio_queue.task_done()  # Wichtig: Signal, dass die Aufgabe erledigt ist
 
         async def sts_receiver(sts_ws):
             print("sts_receiver started")
-            # we will wait until the twilio ws connection figures out the streamsid
             streamsid = await streamsid_queue.get()
-            # for each sts result received, forward it on to the call
             async for message in sts_ws:
-                if type(message) is str:
+                if isinstance(message, str):
                     print(message)
-                    # handle barge-in
                     decoded = json.loads(message)
                     if decoded['type'] == 'UserStartedSpeaking':
                         clear_message = {
@@ -107,9 +102,7 @@ async def twilio_handler(twilio_ws):
                     elif decoded['type'] == 'assistant':
                         print("\n--- FRAUD ANALYSIS ---")
                         try:
-                            # The LLM's response is in the 'prompt_response' field
                             analysis = json.loads(decoded.get('prompt_response', '{}'))
-                            
                             is_fraud = analysis.get('is_fraudulent', False)
                             fraud_type = analysis.get('fraud_type', 'none')
                             reasoning = analysis.get('reasoning', 'No analysis provided.')
@@ -121,34 +114,23 @@ async def twilio_handler(twilio_ws):
                             else:
                                 print("✅ Call appears normal.")
                                 print(f"   Analysis: {reasoning}")
-
                         except json.JSONDecodeError:
-                                print("⚠️ Could not parse agent's analysis.")
-                                print(f"Raw Response: {decoded.get('prompt_response')}")
-                            
+                            print("⚠️ Could not parse agent's analysis.")
+                            print(f"Raw Response: {decoded.get('prompt_response')}")
                         print("------------------------\n")
-
                     continue
 
-                print(type(message))
                 raw_mulaw = message
-
-                # construct a Twilio media message with the raw mulaw (see https://www.twilio.com/docs/voice/twiml/stream#websocket-messages---to-twilio)
                 media_message = {
                     "event": "media",
                     "streamSid": streamsid,
                     "media": {"payload": base64.b64encode(raw_mulaw).decode("ascii")},
                 }
-
-                # send the TTS audio to the attached phonecall
                 await twilio_ws.send(json.dumps(media_message))
 
         async def twilio_receiver(twilio_ws):
             print("twilio_receiver started")
-            # twilio sends audio data as 160 byte messages containing 20ms of audio each
-            # we will buffer 20 twilio messages corresponding to 0.4 seconds of audio to improve throughput performance
             BUFFER_SIZE = 20 * 160
-
             inbuffer = bytearray(b"")
             async for message in twilio_ws:
                 try:
@@ -158,59 +140,59 @@ async def twilio_handler(twilio_ws):
                         start = data["start"]
                         streamsid = start["streamSid"]
                         streamsid_queue.put_nowait(streamsid)
-                    if data["event"] == "connected":
+                    elif data["event"] == "connected":
                         continue
-                    if data["event"] == "media":
+                    elif data["event"] == "media":
                         media = data["media"]
-                        chunk = base64.b64decode(media["payload"])
                         if media["track"] == "inbound":
+                            chunk = base64.b64decode(media["payload"])
                             inbuffer.extend(chunk)
-                    if data["event"] == "stop":
+                    elif data["event"] == "stop":
                         break
 
-                    # check if our buffer is ready to send to our audio_queue (and, thus, then to sts)
                     while len(inbuffer) >= BUFFER_SIZE:
                         chunk = inbuffer[:BUFFER_SIZE]
                         audio_queue.put_nowait(chunk)
                         inbuffer = inbuffer[BUFFER_SIZE:]
-                except:
+                except json.JSONDecodeError:
+                    print("Received a non-JSON message, ignoring.")
+                    continue
+                except websockets.exceptions.ConnectionClosed:
+                    print("Twilio connection closed.")
                     break
 
-        # the async for loop will end if the ws connection from twilio dies
-        # and if this happens, we should forward an some kind of message to sts
-        # to signal sts to send back remaining messages before closing(?)
-        # audio_queue.put_nowait(b'')
+            print("twilio_receiver finished, signaling sts_sender to stop.")
+            audio_queue.put_nowait(None)  # Signal, dass kein Audio mehr kommt
 
-        await asyncio.wait(
-            [
-                asyncio.ensure_future(sts_sender(sts_ws)),
-                asyncio.ensure_future(sts_receiver(sts_ws)),
-                asyncio.ensure_future(twilio_receiver(twilio_ws)),
-            ]
+        await asyncio.gather(
+            sts_sender(sts_ws),
+            sts_receiver(sts_ws),
+            twilio_receiver(twilio_ws),
         )
 
         await twilio_ws.close()
 
+async def router(websocket):
+    #print(f"Incoming connection on path: {path}")
+    #if path == "/twilio":
+    print("Starting Twilio handler")
+    await twilio_handler(websocket)
 
-async def router(websocket, path):
-    print(f"Incoming connection on path: {path}")
-    if path == "/twilio":
-        print("Starting Twilio handler")
-        await twilio_handler(websocket)
-
-def main():
-    # use this if using ssl
-    # ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-    # ssl_context.load_cert_chain('cert.pem', 'key.pem')
-    # server = websockets.serve(router, '0.0.0.0', 443, ssl=ssl_context)
-
-    # use this if not using ssl
-    server = websockets.serve(router, "localhost", 5000)
-    print("Server starting on ws://localhost:5000")
-
-    asyncio.get_event_loop().run_until_complete(server)
-    asyncio.get_event_loop().run_forever()
-
+# Nachher
+async def main():
+    print("Starting WebSocket server...")
+    # websockets.serve gibt ein AsyncContextManager-Objekt zurück.
+    # 'async with' startet den Server und sorgt dafür, dass er auch wieder sauber beendet wird.
+    async with websockets.serve(router, "localhost", 5000):
+        print("Server is now running on ws://localhost:5000")
+        # Dieser Befehl hält das Programm am Laufen,
+        # bis ein externes Signal (z. B. Strg+C) den Server stoppt.
+        await asyncio.Future()  # Warte unbegrenzt, bis der Task beendet wird.
 
 if __name__ == "__main__":
-    sys.exit(main() or 0)   
+    try:
+        # asyncio.run() startet eine neue Event-Loop und führt die 'main()'-Funktion aus.
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        print("Server stopped by user.")
+    sys.exit(0)
