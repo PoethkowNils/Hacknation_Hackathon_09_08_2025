@@ -1,0 +1,30 @@
+<div class="modal fade" id="modal-call-in-progress" tabindex="-1" role="dialog">
+  <div class="modal-dialog" role="document">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title">Call in progress</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body">
+        <div class="call-info">
+          <div id="callDuration">00:00</div>
+          <div id="callerNumber"><span id="txtPhoneNumber"></span></div>
+          
+          <!-- Fraud Alert Indicator -->
+          <div id="fraud-alert-indicator" class="d-none mt-3">
+            <div class="alert alert-danger d-flex align-items-center">
+              <i class="fas fa-exclamation-triangle me-2"></i>
+              <div>
+                <strong>FRAUD DETECTED!</strong>
+                <div id="fraud-alert-text" class="small"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-danger btnHangUp">Hang Up</button>
+      </div>
+    </div>
+  </div>
+</div>
